@@ -6,6 +6,7 @@ import { useState, useCallback } from 'react';
 import axios from 'axios';
 import { useAPIConfig } from './use-api-config';
 import { AIPersona, Job } from '@/lib/db/types';
+import { describeDocument } from '@/lib/ai-context';
 
 interface ChatRequest {
   jobId: string;
@@ -84,19 +85,26 @@ export function useAIChat() {
         setError(null);
 
         // 构建系统提示词，注入岗位和简历上下文
-        const systemPrompt = `${personaPrompts[request.persona]}
-
-当前岗位信息：
-- 公司：${request.job.companyName}
-- 岗位：${request.job.jobTitle}
-- 地点：${request.job.location}
-- 核心技能需求：${request.job.coreSkills.join('、')}
-
-${request.job.jdContent ? `岗位 JD：\n${request.job.jdContent}\n` : ''}
-
-${request.job.resumeContent ? `用户简历：\n${request.job.resumeContent}\n` : ''}
-
-请基于以上信息与用户进行对话。`;
+        // 注意：文件内容以 Base64 存储，需经 describeDocument 过滤，避免超长/非法请求导致 400
+        const jdSection = describeDocument('岗位 JD', request.job.jdContent);
+        const resumeSection = describeDocument('用户简历', request.job.resumeContent);
+        const skills = request.job.coreSkills?.length
+          ? request.job.coreSkills.join('、')
+          : '（暂无）';
+        const systemPrompt = [
+          personaPrompts[request.persona],
+          '',
+          '当前岗位信息：',
+          `- 公司：${request.job.companyName}`,
+          `- 岗位：${request.job.jobTitle}`,
+          `- 地点：${request.job.location}`,
+          `- 核心技能需求：${skills}`,
+          jdSection ? `\n${jdSection}` : '',
+          resumeSection ? `\n${resumeSection}` : '',
+          '\n请基于以上信息与用户进行对话。',
+        ]
+          .filter(Boolean)
+          .join('\n');
 
         const response = await axios.post(
           `${config.baseUrl}/v1/chat/completions`,

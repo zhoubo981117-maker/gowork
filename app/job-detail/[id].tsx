@@ -9,6 +9,7 @@ import { ScreenContainer } from '@/components/screen-container';
 import { useColors } from '@/hooks/use-colors';
 import { getJobById, updateJob } from '@/lib/db/database';
 import { Job, InterviewStatus } from '@/lib/db/types';
+import { openDocument } from '@/lib/open-document';
 
 const statusOptions = [
   { value: InterviewStatus.BEFORE_APPLY, label: '投递前' },
@@ -75,6 +76,24 @@ export default function JobDetailScreen() {
     if (job) {
       router.push(`/chat/${job.id}`);
     }
+  };
+
+  const handleViewJD = () => {
+    if (!job) return;
+    openDocument({
+      fileUri: job.jdFileUri,
+      content: job.jdContent,
+      displayName: `岗位JD-${job.companyName}`,
+    });
+  };
+
+  const handleViewResume = () => {
+    if (!job) return;
+    openDocument({
+      fileUri: job.resumeFileUri,
+      content: job.resumeContent,
+      displayName: `简历-${job.companyName}`,
+    });
   };
 
   if (isLoading) {
@@ -228,8 +247,9 @@ export default function JobDetailScreen() {
           <View className="gap-2">
             <Text className="text-sm font-semibold text-foreground">原始文档</Text>
             <View className="gap-2">
-              {job.jdFileUri && (
+              {(job.jdFileUri || job.jdContent) && (
                 <TouchableOpacity
+                  onPress={handleViewJD}
                   style={{
                     paddingHorizontal: 12,
                     paddingVertical: 10,
@@ -242,8 +262,9 @@ export default function JobDetailScreen() {
                   <Text style={{ color: colors.foreground }}>📋 查看岗位 JD</Text>
                 </TouchableOpacity>
               )}
-              {job.resumeFileUri && (
+              {(job.resumeFileUri || job.resumeContent) && (
                 <TouchableOpacity
+                  onPress={handleViewResume}
                   style={{
                     paddingHorizontal: 12,
                     paddingVertical: 10,

@@ -5,6 +5,7 @@
 import { useState, useCallback } from 'react';
 import axios, { AxiosError } from 'axios';
 import { useAPIConfig } from './use-api-config';
+import { describeDocument } from '@/lib/ai-context';
 
 export interface ParseResult {
   companyName: string;
@@ -166,7 +167,7 @@ export function useAIParser() {
               },
               {
                 role: 'user',
-                content: `请解析以下岗位 JD：\n\n${jdContent}`,
+                content: `请解析以下岗位 JD：\n\n${describeDocument('岗位 JD', jdContent) || jdContent}`,
               },
             ],
             temperature: 0.3,
@@ -247,7 +248,7 @@ export function useAIParser() {
               },
               {
                 role: 'user',
-                content: `请分析我的简历与这个岗位的匹配度。\n\n岗位 JD：\n${jdContent}\n\n我的简历：\n${resumeContent}`,
+                content: `请分析我的简历与这个岗位的匹配度。\n\n${describeDocument('岗位 JD', jdContent)}\n\n${describeDocument('我的简历', resumeContent)}`,
               },
             ],
             temperature: 0.5,
