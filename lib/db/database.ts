@@ -6,6 +6,26 @@
 import { Platform } from 'react-native';
 import { APIConfig, ChatMessage, InterviewStatus, Job, AIPersona } from './types';
 
+/**
+ * 将数据库行转换为 Job 对象
+ * coreSkills 在数据库中以 JSON 字符串存储，读取时需要反序列化为数组
+ */
+function deserializeJob(row: any): Job {
+  let coreSkills: string[] = [];
+  if (Array.isArray(row.coreSkills)) {
+    coreSkills = row.coreSkills;
+  } else if (typeof row.coreSkills === 'string' && row.coreSkills.trim()) {
+    try {
+      const parsed = JSON.parse(row.coreSkills);
+      coreSkills = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      // 兼容旧数据：以逗号分隔的字符串
+      coreSkills = row.coreSkills.split(',').map((s: string) => s.trim()).filter(Boolean);
+    }
+  }
+  return { ...row, coreSkills } as Job;
+}
+
 let db: any = null;
 let initPromise: Promise<any> | null = null;
 let isInitialized = false;
@@ -146,7 +166,7 @@ export async function addJob(job: Omit<Job, 'id' | 'createdAt' | 'updatedAt'>): 
           job.jdFileUri,
           job.resumeContent,
           job.resumeFileUri,
-          job.coreSkills,
+          JSON.stringify(job.coreSkills || []),
           job.matchAnalysis,
           now,
           now,
@@ -175,7 +195,7 @@ export async function getAllJobs(): Promise<Job[]> {
 
     if (database && Platform.OS !== 'web') {
       const result = await (database.getAllAsync as any)('SELECT * FROM jobs ORDER BY updatedAt DESC');
-      return result || [];
+      return (result || []).map(deserializeJob);
     }
 
     return [];
@@ -194,7 +214,7 @@ export async function getJobById(id: string): Promise<Job | null> {
 
     if (database && Platform.OS !== 'web') {
       const result = await (database.getFirstAsync as any)('SELECT * FROM jobs WHERE id = ?', [id]);
-      return result || null;
+      return result ? deserializeJob(result) : null;
     }
 
     return null;
@@ -235,7 +255,7 @@ export async function updateJob(id: string, updates: Partial<Job>): Promise<Job>
           updatedJob.jdFileUri,
           updatedJob.resumeContent,
           updatedJob.resumeFileUri,
-          updatedJob.coreSkills,
+          JSON.stringify(updatedJob.coreSkills || []),
           updatedJob.matchAnalysis,
           updatedJob.updatedAt,
           id,

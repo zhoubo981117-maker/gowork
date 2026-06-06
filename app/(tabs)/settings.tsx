@@ -2,11 +2,12 @@
  * 设置页面 - API 配置
  */
 
-import { ScrollView, Text, View, TextInput, TouchableOpacity, Alert } from 'react-native';
+import { ScrollView, Text, View, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useState, useEffect } from 'react';
 import { ScreenContainer } from '@/components/screen-container';
 import { useAPIConfig } from '@/hooks/use-api-config';
 import { useColors } from '@/hooks/use-colors';
+import { testAPIConnection, APITestResult } from '@/hooks/use-ai-parser';
 
 const PRESET_MODELS = ['GPT-5.5', 'Claude Opus 4.8', 'Gemini 2.0'];
 
@@ -20,6 +21,8 @@ export default function SettingsScreen() {
   const [customModel, setCustomModel] = useState('');
   const [showCustomModel, setShowCustomModel] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<APITestResult | null>(null);
 
   // 初始化表单
   useEffect(() => {
@@ -66,12 +69,34 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleTest = async () => {
+    const model = showCustomModel ? customModel : selectedModel;
+    setTestResult(null);
+    setIsTesting(true);
+    try {
+      const result = await testAPIConnection({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        model: model.trim(),
+      });
+      setTestResult(result);
+    } catch (error) {
+      setTestResult({
+        success: false,
+        message: error instanceof Error ? error.message : '测试失败，请重试',
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   const handleReset = () => {
     setBaseUrl('');
     setApiKey('');
     setSelectedModel('GPT-5.5');
     setCustomModel('');
     setShowCustomModel(false);
+    setTestResult(null);
   };
 
   if (isLoading) {
@@ -225,6 +250,54 @@ export default function SettingsScreen() {
 
           {/* 按钮组 */}
           <View className="gap-3 pt-4">
+            <TouchableOpacity
+              onPress={handleTest}
+              disabled={isSaving || isTesting}
+              style={{
+                paddingVertical: 12,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: colors.primary,
+                backgroundColor: colors.surface,
+                alignItems: 'center',
+                flexDirection: 'row',
+                justifyContent: 'center',
+                gap: 8,
+                opacity: isSaving || isTesting ? 0.6 : 1,
+              }}
+            >
+              {isTesting && <ActivityIndicator size="small" color={colors.primary} />}
+              <Text style={{ color: colors.primary, fontWeight: '600' }}>
+                {isTesting ? '测试中...' : '测试连接'}
+              </Text>
+            </TouchableOpacity>
+
+            {testResult && (
+              <View
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  borderRadius: 8,
+                  backgroundColor: colors.surface,
+                  borderLeftWidth: 4,
+                  borderLeftColor: testResult.success ? colors.success : colors.error,
+                }}
+              >
+                <Text
+                  style={{
+                    color: testResult.success ? colors.success : colors.error,
+                    fontWeight: '600',
+                    marginBottom: 4,
+                  }}
+                >
+                  {testResult.success ? '✓ 测试通过' : '✗ 测试失败'}
+                </Text>
+                <Text style={{ color: colors.foreground, fontSize: 12, lineHeight: 18 }}>
+                  {testResult.message}
+                </Text>
+              </View>
+            )}
+
             <TouchableOpacity
               onPress={handleSave}
               disabled={isSaving}
