@@ -63,7 +63,8 @@ export default function SettingsScreen() {
       });
       Alert.alert('成功', 'API 配置已保存');
     } catch (error) {
-      Alert.alert('错误', '保存配置失败，请重试');
+      const detail = error instanceof Error ? error.message : String(error);
+      Alert.alert('错误', `保存配置失败，请重试\n\n${detail}`);
     } finally {
       setIsSaving(false);
     }

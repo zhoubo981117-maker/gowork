@@ -123,7 +123,8 @@ export default function ImportScreen() {
           { text: '确定', onPress: () => router.push('/(tabs)') },
         ]);
       } else {
-        Alert.alert('错误', '保存岗位失败，请重试');
+        const detail = error instanceof Error ? error.message : String(error);
+        Alert.alert('错误', `保存岗位失败，请重试\n\n${detail}`);
       }
     } finally {
       setIsAnalyzing(false);

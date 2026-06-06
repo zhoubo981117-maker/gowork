@@ -27,76 +27,80 @@ function deserializeJob(row: any): Job {
 }
 
 let db: any = null;
-let initPromise: Promise<any> | null = null;
-let isInitialized = false;
+// 缓存「打开数据库 + 建表」的过程，确保任意读写之前表一定已创建
+let readyPromise: Promise<any> | null = null;
 
 /**
- * 延迟导入 expo-sqlite（仅在需要时）
+ * 打开数据库并确保所有表已创建。
+ * 失败时抛出错误，并清空缓存以便下次调用重试。
  */
-async function getDatabase() {
+async function openAndPrepare(): Promise<any> {
+  if (Platform.OS === 'web') {
+    return null;
+  }
+
+  const { openDatabaseAsync } = await import('expo-sqlite');
+  const database = await openDatabaseAsync('gowork.db');
+  console.log('[DB] SQLite database opened');
+
+  // 外键约束（聊天记录级联删除）
+  try {
+    await database.execAsync('PRAGMA foreign_keys = ON;');
+  } catch (e) {
+    console.warn('[DB] Failed to enable foreign_keys:', e);
+  }
+
+  await createTables(database);
+  db = database;
+  console.log('[DB] ✓ Database ready');
+  return database;
+}
+
+/**
+ * 获取已就绪的数据库实例（已建表）。
+ * 所有读写都应通过此函数获取实例，避免在表创建完成前执行 SQL。
+ */
+async function getDatabase(): Promise<any> {
+  if (Platform.OS === 'web') return null;
   if (db) return db;
 
+  if (!readyPromise) {
+    readyPromise = openAndPrepare().catch((error) => {
+      // 允许后续调用重试，而不是永久卡在失败状态
+      readyPromise = null;
+      console.error('[DB] Failed to prepare database:', error);
+      throw error;
+    });
+  }
+
+  return readyPromise;
+}
+
+/**
+ * 初始化数据库连接（在应用启动时后台调用）。
+ * 真正的就绪保证在每次读写时通过 getDatabase() 完成。
+ */
+export async function initializeDatabase(): Promise<void> {
   try {
-    // 仅在 Android/iOS 上导入 SQLite
-    if (Platform.OS !== 'web') {
-      const { openDatabaseAsync } = await import('expo-sqlite');
-      db = await openDatabaseAsync('gowork.db');
-      console.log('[DB] SQLite database opened');
-    } else {
-      console.log('[DB] Web platform detected, using AsyncStorage');
-    }
-    return db;
+    console.log('[DB] Platform:', Platform.OS);
+    await getDatabase();
   } catch (error) {
-    console.error('[DB] Failed to get database:', error);
-    return null;
+    // 后台初始化失败不阻塞 UI；后续读写会再次尝试并把错误暴露给用户
+    console.error('[DB] Background initialization failed:', error);
   }
 }
 
 /**
- * 初始化数据库连接
- */
-export async function initializeDatabase(): Promise<void> {
-  if (isInitialized) return;
-  if (initPromise) return initPromise;
-
-  initPromise = (async () => {
-    try {
-      console.log('[DB] Platform:', Platform.OS);
-      console.log('[DB] Starting database initialization...');
-
-      // 尝试获取数据库实例
-      const database = await getDatabase();
-
-      if (database && Platform.OS !== 'web') {
-        // 仅在原生平台创建表
-        await createTables(database);
-        console.log('[DB] ✓ Database initialized successfully');
-      } else {
-        console.log('[DB] Using AsyncStorage fallback');
-      }
-
-      isInitialized = true;
-    } catch (error) {
-      console.error('[DB] ✗ Database initialization failed:', error);
-      // 即使失败也标记为初始化完成，使用降级模式
-      isInitialized = true;
-    }
-  })();
-
-  return initPromise;
-}
-
-/**
- * 创建所有表
+ * 创建所有表（逐条执行，提升不同 SQLite 实现下的兼容性）。
+ * 任一语句失败都会抛出错误，由调用方处理。
  */
 async function createTables(database: any): Promise<void> {
   if (!database) return;
 
-  try {
-    console.log('[DB] Creating tables...');
+  console.log('[DB] Creating tables...');
 
-    const sql = `
-      CREATE TABLE IF NOT EXISTS jobs (
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS jobs (
         id TEXT PRIMARY KEY,
         companyName TEXT NOT NULL,
         jobTitle TEXT NOT NULL,
@@ -110,9 +114,8 @@ async function createTables(database: any): Promise<void> {
         matchAnalysis TEXT,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS chat_messages (
+      );`,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
         id TEXT PRIMARY KEY,
         jobId TEXT NOT NULL,
         aiPersona TEXT NOT NULL,
@@ -120,26 +123,23 @@ async function createTables(database: any): Promise<void> {
         content TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         FOREIGN KEY (jobId) REFERENCES jobs(id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS api_config (
+      );`,
+    `CREATE TABLE IF NOT EXISTS api_config (
         id TEXT PRIMARY KEY,
         baseUrl TEXT NOT NULL,
         apiKey TEXT NOT NULL,
         model TEXT NOT NULL,
         updatedAt INTEGER NOT NULL
-      );
+      );`,
+    `CREATE INDEX IF NOT EXISTS idx_chat_jobId_persona ON chat_messages(jobId, aiPersona);`,
+    `CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_messages(timestamp);`,
+  ];
 
-      CREATE INDEX IF NOT EXISTS idx_chat_jobId_persona ON chat_messages(jobId, aiPersona);
-      CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_messages(timestamp);
-    `;
-
-    await database.execAsync(sql);
-    console.log('[DB] Tables created successfully');
-  } catch (error) {
-    console.error('[DB] Error creating tables:', error);
-    // 不抛出错误，继续运行
+  for (const statement of statements) {
+    await database.execAsync(statement);
   }
+
+  console.log('[DB] Tables created successfully');
 }
 
 /**
