@@ -3,7 +3,9 @@ name: Build Android APK
 on:
   push:
     branches:
-      - claude/android-app-fixes-TfLX9
+      # 在所有 claude/** 分支上构建（含原 android-app-fixes 分支与各开发分支），
+      # 无需等合并即可出包
+      - "claude/**"
     paths-ignore:
       - "**/*.md"
   workflow_dispatch:
@@ -55,31 +57,66 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
+      - name: Compute version metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          DATE="$(date -u +'%Y.%m.%d')"
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          VERSION="v${DATE}-${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed version: $VERSION (branch=$BRANCH)"
+
       - name: Locate APK
         id: apk
         run: |
           APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n1)
           echo "Found APK: $APK"
+          # 稳定文件名（供 android-latest 使用）
           cp "$APK" gowork.apk
-          echo "path=gowork.apk" >> "$GITHUB_OUTPUT"
+          # 带版本号的文件名（供版本化 release 使用）
+          cp "$APK" "gowork-${{ steps.meta.outputs.version }}.apk"
+          echo "versioned=gowork-${{ steps.meta.outputs.version }}.apk" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gowork-android-apk
-          path: gowork.apk
+          name: gowork-android-apk-${{ steps.meta.outputs.version }}
+          path: ${{ steps.apk.outputs.versioned }}
           if-no-files-found: error
 
-      - name: Publish APK to a downloadable Release
+      # 1) 每次构建都新建一个带版本号的 release，显示在 Releases 列表顶部，便于追溯历史
+      - name: Publish versioned Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: go work Android APK ${{ steps.meta.outputs.version }} (${{ steps.meta.outputs.branch }})
+          body: |
+            Android APK built from `${{ github.ref_name }}` (commit `${{ steps.meta.outputs.short_sha }}`, run #${{ github.run_number }}).
+
+            下载下方的 `${{ steps.apk.outputs.versioned }}`，在安卓手机上打开并允许「未知来源」安装即可。
+
+            稳定下载地址（始终指向最新构建）：
+            https://github.com/${{ github.repository }}/releases/tag/android-latest
+          files: ${{ steps.apk.outputs.versioned }}
+          make_latest: true
+
+      # 2) 同时原地更新滚动标签 android-latest，作为始终指向最新版的固定下载地址
+      - name: Update rolling android-latest Release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
           name: go work Android APK (latest)
           body: |
-            Latest installable Android APK built from `${{ github.ref_name }}` (commit ${{ github.sha }}).
+            始终指向最新构建的可安装 Android APK。
 
-            Download `gowork.apk` below, open it on your Android phone, and allow
-            installation from unknown sources to install.
+            当前版本：`${{ steps.meta.outputs.version }}`
+            来源分支：`${{ github.ref_name }}`（commit `${{ steps.meta.outputs.short_sha }}`，run #${{ github.run_number }}）
+
+            下载下方的 `gowork.apk`，在安卓手机上打开并允许「未知来源」安装即可。
           files: gowork.apk
-          make_latest: true
+          make_latest: false
