@@ -3,8 +3,8 @@
  */
 
 import { ScrollView, Text, View, TouchableOpacity, FlatList, TextInput, ActivityIndicator } from 'react-native';
-import { useState, useEffect } from 'react';
-import { useRouter } from 'expo-router';
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenContainer } from '@/components/screen-container';
 import { JobCard } from '@/components/job-card';
 import { useJobs } from '@/hooks/use-jobs';
@@ -28,6 +28,13 @@ export default function HomeScreen() {
   const [selectedStatus, setSelectedStatus] = useState<InterviewStatus | null>(null);
   const [searchLocation, setSearchLocation] = useState('');
   const [filteredJobs, setFilteredJobs] = useState(jobs);
+
+  // 每次进入/回到首页时重新加载岗位列表，确保新导入的岗位能立即显示
+  useFocusEffect(
+    useCallback(() => {
+      loadJobs();
+    }, [loadJobs])
+  );
 
   // 更新过滤后的岗位列表
   useEffect(() => {

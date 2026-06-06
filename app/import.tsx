@@ -17,11 +17,12 @@ export default function ImportScreen() {
   const colors = useColors();
   const { pickFile, isLoading: isPickingFile } = useFilePicker();
   const { parseJD, generateMatchAnalysis, isLoading: isParsingAI } = useAIParser();
-  const { addJob } = useJobs();
+  const { addJob, modifyJob } = useJobs();
 
   const [resumeFile, setResumeFile] = useState<PickedFile | null>(null);
   const [jdFile, setJDFile] = useState<PickedFile | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const handleBack = () => {
     router.back();
@@ -41,64 +42,99 @@ export default function ImportScreen() {
     }
   };
 
+  // 从文件名生成一个初始岗位名（去掉扩展名）
+  const fileNameToTitle = (name: string) => {
+    const base = name.replace(/\.[^.]+$/, '').trim();
+    return base || '未命名岗位';
+  };
+
   const handleAnalyzeAndSave = async () => {
     if (!resumeFile || !jdFile) {
       Alert.alert('错误', '请先上传简历和岗位 JD');
       return;
     }
 
+    let savedJobId: string | null = null;
+
     try {
       setIsAnalyzing(true);
 
-      // 1. 解析 JD 获取基本信息
-      Alert.alert('提示', '正在分析岗位 JD...');
-      const parseResult = await parseJD(jdFile.base64 || jdFile.uri);
-
-      if (!parseResult) {
-        Alert.alert('错误', '岗位解析失败，请检查 API 配置');
-        return;
-      }
-
-      // 2. 生成人岗匹配度分析
-      Alert.alert('提示', '正在生成匹配度分析...');
-      const matchAnalysis = await generateMatchAnalysis(
-        jdFile.base64 || jdFile.uri,
-        resumeFile.base64 || resumeFile.uri
-      );
-
-      // 3. 保存到数据库
+      // 1. 断点：先保存简历与 JD，确保即使后续 AI 分析失败，
+      //    岗位也已落库、可在首页查看。
+      setStatusMessage('正在保存简历与岗位...');
       const newJob = await addJob({
-        companyName: parseResult.companyName,
-        jobTitle: parseResult.jobTitle,
-        location: parseResult.location,
+        companyName: '待分析',
+        jobTitle: fileNameToTitle(jdFile.name),
+        location: '待分析',
         status: InterviewStatus.BEFORE_APPLY,
         jdContent: jdFile.base64 || jdFile.uri,
         jdFileUri: jdFile.uri,
         resumeContent: resumeFile.base64 || resumeFile.uri,
         resumeFileUri: resumeFile.uri,
-        coreSkills: parseResult.coreSkills,
-        matchAnalysis: matchAnalysis || '匹配度分析生成失败',
+        coreSkills: [],
+        matchAnalysis: '',
       });
+      savedJobId = newJob.id;
 
-      Alert.alert('成功', '岗位已添加，即将返回主页', [
-        {
-          text: '确定',
-          onPress: () => {
-            router.push('/(tabs)');
+      // 2. 基于已保存的数据进行 AI 分析。分析失败不影响已保存的岗位。
+      setStatusMessage('正在分析岗位 JD...');
+      const parseResult = await parseJD(jdFile.base64 || jdFile.uri);
+
+      if (parseResult) {
+        await modifyJob(savedJobId, {
+          companyName: parseResult.companyName,
+          jobTitle: parseResult.jobTitle,
+          location: parseResult.location,
+          coreSkills: parseResult.coreSkills,
+        });
+      }
+
+      // 3. 生成人岗匹配度分析（同样为可选增强步骤）
+      setStatusMessage('正在生成匹配度分析...');
+      const matchAnalysis = await generateMatchAnalysis(
+        jdFile.base64 || jdFile.uri,
+        resumeFile.base64 || resumeFile.uri
+      );
+
+      if (matchAnalysis) {
+        await modifyJob(savedJobId, { matchAnalysis });
+      }
+
+      const analysisFailed = !parseResult || !matchAnalysis;
+      Alert.alert(
+        '成功',
+        analysisFailed
+          ? '简历与岗位已保存到首页。部分 AI 分析未完成（请检查设置页的 API 配置或点击“测试连接”），稍后可重新分析。'
+          : '岗位已添加，即将返回主页',
+        [
+          {
+            text: '确定',
+            onPress: () => {
+              router.push('/(tabs)');
+            },
           },
-        },
-      ]);
+        ]
+      );
     } catch (error) {
-      Alert.alert('错误', '保存岗位失败，请重试');
       console.error('Error:', error);
+      // 若已成功保存，仍提示用户岗位已落库
+      if (savedJobId) {
+        Alert.alert('提示', '岗位已保存到首页，但 AI 分析失败，请稍后重试或检查 API 配置。', [
+          { text: '确定', onPress: () => router.push('/(tabs)') },
+        ]);
+      } else {
+        Alert.alert('错误', '保存岗位失败，请重试');
+      }
     } finally {
       setIsAnalyzing(false);
+      setStatusMessage('');
     }
   };
 
   const handleClear = () => {
     setResumeFile(null);
     setJDFile(null);
+    setStatusMessage('');
   };
 
   const isLoading = isPickingFile || isParsingAI || isAnalyzing;
@@ -263,7 +299,7 @@ export default function ImportScreen() {
             >
               {isLoading && <ActivityIndicator size="small" color={colors.background} />}
               <Text style={{ color: colors.background, fontWeight: '600' }}>
-                {isLoading ? '分析中...' : '分析并保存'}
+                {isAnalyzing ? statusMessage || '处理中...' : isLoading ? '处理中...' : '分析并保存'}
               </Text>
             </TouchableOpacity>
 
@@ -296,7 +332,7 @@ export default function ImportScreen() {
             }}
           >
             <Text style={{ color: colors.foreground, fontSize: 12, lineHeight: 18 }}>
-              💡 提示：文件将保存在本地，AI 将自动提取关键信息并分析人岗匹配度。请确保已在设置页配置 API。
+              💡 提示：简历与岗位会先保存到本地（首页即可查看），随后 AI 才基于已保存的数据提取关键信息并分析人岗匹配度。即使 AI 分析失败，岗位也不会丢失。请确保已在设置页配置并测试 API。
             </Text>
           </View>
         </View>

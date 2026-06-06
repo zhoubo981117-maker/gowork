@@ -23,6 +23,111 @@ interface AIResponse {
   [key: string]: any;
 }
 
+export interface APITestResult {
+  success: boolean;
+  message: string;
+  latencyMs?: number;
+}
+
+/**
+ * 测试 API 连接与模型可用性
+ * 使用传入的配置（而非已保存配置），便于在保存前先验证
+ */
+export async function testAPIConnection(params: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}): Promise<APITestResult> {
+  const { baseUrl, apiKey, model } = params;
+
+  if (!baseUrl?.trim()) {
+    return { success: false, message: '请先填写 Base URL' };
+  }
+  if (!apiKey?.trim()) {
+    return { success: false, message: '请先填写 API Key' };
+  }
+  if (!model?.trim()) {
+    return { success: false, message: '请先选择或填写模型名称' };
+  }
+
+  // 规范化 baseUrl，避免出现重复的斜杠
+  const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, '');
+  const startedAt = Date.now();
+
+  try {
+    const response = await axios.post(
+      `${normalizedBaseUrl}/v1/chat/completions`,
+      {
+        model: model.trim(),
+        messages: [
+          { role: 'user', content: '请回复"ok"两个字以确认连接成功。' },
+        ],
+        max_tokens: 10,
+        temperature: 0,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 20000,
+      }
+    );
+
+    const latencyMs = Date.now() - startedAt;
+    const content = response.data?.choices?.[0]?.message?.content;
+
+    if (typeof content === 'string') {
+      return {
+        success: true,
+        message: `连接成功，模型 "${model.trim()}" 可正常调用（耗时 ${latencyMs}ms）`,
+        latencyMs,
+      };
+    }
+
+    return {
+      success: false,
+      message: '已连接，但返回内容为空，请检查模型名称是否正确',
+      latencyMs,
+    };
+  } catch (err) {
+    const error = err as AxiosError<any>;
+
+    if (error.response) {
+      const status = error.response.status;
+      const data = error.response.data;
+      const detail =
+        (data && (data.error?.message || data.message)) ||
+        (typeof data === 'string' ? data : '');
+
+      let hint = '';
+      if (status === 401 || status === 403) {
+        hint = 'API Key 无效或无权限';
+      } else if (status === 404) {
+        hint = 'Base URL 或模型路径不正确';
+      } else if (status === 429) {
+        hint = '请求过于频繁或额度不足';
+      } else if (status >= 500) {
+        hint = '服务端错误，请稍后再试';
+      }
+
+      return {
+        success: false,
+        message: `请求失败 (HTTP ${status})${hint ? `：${hint}` : ''}${detail ? `\n${detail}` : ''}`,
+      };
+    }
+
+    if (error.code === 'ECONNABORTED') {
+      return { success: false, message: '请求超时，请检查网络或 Base URL 是否可访问' };
+    }
+
+    return {
+      success: false,
+      message: `无法连接到服务：${error.message || '未知错误'}，请检查 Base URL 与网络`,
+    };
+  }
+}
+
 export function useAIParser() {
   const { config } = useAPIConfig();
   const [isLoading, setIsLoading] = useState(false);
