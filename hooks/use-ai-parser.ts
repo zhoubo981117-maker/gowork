@@ -5,7 +5,12 @@
 import { useState, useCallback } from 'react';
 import axios, { AxiosError } from 'axios';
 import { useAPIConfig } from './use-api-config';
-import { describeDocument } from '@/lib/ai-context';
+import {
+  buildUserContent,
+  buildTextOnlyContent,
+  hasImageParts,
+  DocInput,
+} from '@/lib/ai-context';
 
 export interface ParseResult {
   companyName: string;
@@ -13,6 +18,12 @@ export interface ParseResult {
   location: string;
   coreSkills: string[];
   matchAnalysis?: string;
+}
+
+/** 文件元信息，用于判断是否以图片（视觉）方式发送 */
+export interface FileMeta {
+  mimeType?: string | null;
+  fileUri?: string | null;
 }
 
 interface AIResponse {
@@ -135,10 +146,61 @@ export function useAIParser() {
   const [error, setError] = useState<Error | null>(null);
 
   /**
+   * 调用 chat/completions。优先以多模态（含图片）方式发送；
+   * 若失败（如模型不支持视觉），自动降级为纯文本重试一次，避免硬报错。
+   */
+  const requestCompletion = useCallback(
+    async (params: {
+      systemPrompt: string;
+      instruction: string;
+      docs: DocInput[];
+      temperature: number;
+    }): Promise<string> => {
+      const { systemPrompt, instruction, docs, temperature } = params;
+
+      const post = async (userContent: string | object[]) => {
+        const response = await axios.post(
+          `${config!.baseUrl}/v1/chat/completions`,
+          {
+            model: config!.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userContent },
+            ],
+            temperature,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${config!.apiKey}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        const content = response.data?.choices?.[0]?.message?.content;
+        if (!content) throw new Error('AI 响应为空');
+        return content as string;
+      };
+
+      const visionContent = buildUserContent(instruction, docs);
+      try {
+        return await post(visionContent as any);
+      } catch (err) {
+        // 含图片时降级为纯文本重试一次
+        if (hasImageParts(visionContent)) {
+          console.warn('[AIParser] vision request failed, retrying text-only:', err);
+          return await post(buildTextOnlyContent(instruction, docs));
+        }
+        throw err;
+      }
+    },
+    [config]
+  );
+
+  /**
    * 调用 AI 接口解析 JD
    */
   const parseJD = useCallback(
-    async (jdContent: string): Promise<ParseResult | null> => {
+    async (jdContent: string, jdMeta?: FileMeta): Promise<ParseResult | null> => {
       if (!config?.baseUrl || !config?.apiKey) {
         setError(new Error('API 配置不完整，请先在设置页配置'));
         return null;
@@ -148,43 +210,22 @@ export function useAIParser() {
         setIsLoading(true);
         setError(null);
 
-        const response = await axios.post(
-          `${config.baseUrl}/v1/chat/completions`,
-          {
-            model: config.model,
-            messages: [
-              {
-                role: 'system',
-                content: `你是一个专业的招聘信息解析专家。请从给定的岗位 JD 中提取以下信息，并以 JSON 格式返回：
+        const content = await requestCompletion({
+          systemPrompt: `你是一个专业的招聘信息解析专家。请从给定的岗位 JD（可能是文本或图片）中提取以下信息，并以 JSON 格式返回：
                 {
                   "companyName": "公司名称",
                   "jobTitle": "岗位名称",
                   "location": "工作地点",
                   "coreSkills": ["技能1", "技能2", "技能3"]
                 }
-                
-                确保返回的是有效的 JSON 格式。`,
-              },
-              {
-                role: 'user',
-                content: `请解析以下岗位 JD：\n\n${describeDocument('岗位 JD', jdContent) || jdContent}`,
-              },
-            ],
-            temperature: 0.3,
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${config.apiKey}`,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
 
-        // 解析 AI 响应
-        const content = response.data?.choices?.[0]?.message?.content;
-        if (!content) {
-          throw new Error('AI 响应为空');
-        }
+                确保返回的是有效的 JSON 格式。`,
+          instruction: '请解析以下岗位 JD：',
+          docs: [
+            { label: '岗位 JD', content: jdContent, mimeType: jdMeta?.mimeType, fileUri: jdMeta?.fileUri },
+          ],
+          temperature: 0.3,
+        });
 
         // 尝试从响应中提取 JSON
         const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -212,14 +253,18 @@ export function useAIParser() {
         setIsLoading(false);
       }
     },
-    [config]
+    [config, requestCompletion]
   );
 
   /**
    * 生成人岗匹配度分析
    */
   const generateMatchAnalysis = useCallback(
-    async (jdContent: string, resumeContent: string): Promise<string | null> => {
+    async (
+      jdContent: string,
+      resumeContent: string,
+      meta?: { jd?: FileMeta; resume?: FileMeta }
+    ): Promise<string | null> => {
       if (!config?.baseUrl || !config?.apiKey) {
         setError(new Error('API 配置不完整，请先在设置页配置'));
         return null;
@@ -229,42 +274,23 @@ export function useAIParser() {
         setIsLoading(true);
         setError(null);
 
-        const response = await axios.post(
-          `${config.baseUrl}/v1/chat/completions`,
-          {
-            model: config.model,
-            messages: [
-              {
-                role: 'system',
-                content: `你是一个专业的职业顾问。请根据用户的简历和岗位 JD，生成一份详细的人岗匹配度分析报告。
-                
+        const analysis = await requestCompletion({
+          systemPrompt: `你是一个专业的职业顾问。请根据用户的简历和岗位 JD（可能是文本或图片）生成一份详细的人岗匹配度分析报告。
+
                 分析应包括：
                 1. 整体匹配度评分（0-100）
                 2. 用户的主要优势
                 3. 与岗位要求的差距
                 4. 建议的准备方向
-                
-                使用专业、鼓励的语气，帮助用户了解自己的竞争力。`,
-              },
-              {
-                role: 'user',
-                content: `请分析我的简历与这个岗位的匹配度。\n\n${describeDocument('岗位 JD', jdContent)}\n\n${describeDocument('我的简历', resumeContent)}`,
-              },
-            ],
-            temperature: 0.5,
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${config.apiKey}`,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
 
-        const analysis = response.data?.choices?.[0]?.message?.content;
-        if (!analysis) {
-          throw new Error('AI 响应为空');
-        }
+                使用专业、鼓励的语气，帮助用户了解自己的竞争力。`,
+          instruction: '请分析我的简历与这个岗位的匹配度。',
+          docs: [
+            { label: '岗位 JD', content: jdContent, mimeType: meta?.jd?.mimeType, fileUri: meta?.jd?.fileUri },
+            { label: '我的简历', content: resumeContent, mimeType: meta?.resume?.mimeType, fileUri: meta?.resume?.fileUri },
+          ],
+          temperature: 0.5,
+        });
 
         setError(null);
         return analysis;
@@ -277,7 +303,7 @@ export function useAIParser() {
         setIsLoading(false);
       }
     },
-    [config]
+    [config, requestCompletion]
   );
 
   return {

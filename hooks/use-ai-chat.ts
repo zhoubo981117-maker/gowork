@@ -6,7 +6,12 @@ import { useState, useCallback } from 'react';
 import axios from 'axios';
 import { useAPIConfig } from './use-api-config';
 import { AIPersona, Job } from '@/lib/db/types';
-import { describeDocument } from '@/lib/ai-context';
+import {
+  buildUserContent,
+  buildTextOnlyContent,
+  hasImageParts,
+  DocInput,
+} from '@/lib/ai-context';
 
 interface ChatRequest {
   jobId: string;
@@ -84,10 +89,7 @@ export function useAIChat() {
         setIsLoading(true);
         setError(null);
 
-        // 构建系统提示词，注入岗位和简历上下文
-        // 注意：文件内容以 Base64 存储，需经 describeDocument 过滤，避免超长/非法请求导致 400
-        const jdSection = describeDocument('岗位 JD', request.job.jdContent);
-        const resumeSection = describeDocument('用户简历', request.job.resumeContent);
+        // 系统提示词：仅放角色设定与岗位元信息（短文本）
         const skills = request.job.coreSkills?.length
           ? request.job.coreSkills.join('、')
           : '（暂无）';
@@ -99,41 +101,52 @@ export function useAIChat() {
           `- 岗位：${request.job.jobTitle}`,
           `- 地点：${request.job.location}`,
           `- 核心技能需求：${skills}`,
-          jdSection ? `\n${jdSection}` : '',
-          resumeSection ? `\n${resumeSection}` : '',
-          '\n请基于以上信息与用户进行对话。',
-        ]
-          .filter(Boolean)
-          .join('\n');
+          '\n请结合用户提供的岗位 JD 与简历资料进行对话。',
+        ].join('\n');
 
-        const response = await axios.post(
-          `${config.baseUrl}/v1/chat/completions`,
-          {
-            model: config.model,
-            messages: [
-              {
-                role: 'system',
-                content: systemPrompt,
-              },
-              {
-                role: 'user',
-                content: request.userMessage,
-              },
-            ],
-            temperature: 0.7,
-            max_tokens: 1000,
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${config.apiKey}`,
-              'Content-Type': 'application/json',
+        // 文档（JD/简历）放入 user 消息：图片走视觉块，文本走文本，避免 400
+        const docs: DocInput[] = [
+          { label: '岗位 JD', content: request.job.jdContent, fileUri: request.job.jdFileUri },
+          { label: '用户简历', content: request.job.resumeContent, fileUri: request.job.resumeFileUri },
+        ];
+        const instruction = `用户的问题：${request.userMessage}`;
+
+        const post = async (userContent: string | object[]) => {
+          const response = await axios.post(
+            `${config.baseUrl}/v1/chat/completions`,
+            {
+              model: config.model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userContent },
+              ],
+              temperature: 0.7,
+              max_tokens: 1000,
             },
-          }
-        );
+            {
+              headers: {
+                Authorization: `Bearer ${config.apiKey}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+          const c = response.data?.choices?.[0]?.message?.content;
+          if (!c) throw new Error('AI 响应为空');
+          return c as string;
+        };
 
-        const content = response.data?.choices?.[0]?.message?.content;
-        if (!content) {
-          throw new Error('AI 响应为空');
+        const visionContent = buildUserContent(instruction, docs);
+        let content: string;
+        try {
+          content = await post(visionContent as any);
+        } catch (err) {
+          // 含图片且失败（如模型不支持视觉）时降级为纯文本重试一次
+          if (hasImageParts(visionContent)) {
+            console.warn('[AIChat] vision request failed, retrying text-only:', err);
+            content = await post(buildTextOnlyContent(instruction, docs));
+          } else {
+            throw err;
+          }
         }
 
         setError(null);

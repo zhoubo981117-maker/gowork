@@ -54,3 +54,88 @@ export function describeDocument(title: string, content: string | undefined | nu
   if (!text) return '';
   return `${title}：\n${text}`;
 }
+
+// ---- 多模态（视觉）支持 ----
+
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'heic', 'heif']);
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+};
+
+/** 从文件 uri/名称推断 MIME 类型 */
+export function inferMimeFromUri(uri?: string | null): string | undefined {
+  if (!uri) return undefined;
+  const m = /\.([a-zA-Z0-9]+)(?:\?|#|$)/.exec(uri);
+  const ext = m ? m[1].toLowerCase() : '';
+  return MIME_BY_EXT[ext];
+}
+
+export function isImageMime(mime?: string | null, fileUri?: string | null): boolean {
+  if (mime && mime.startsWith('image/')) return true;
+  const m = /\.([a-zA-Z0-9]+)(?:\?|#|$)/.exec(fileUri || '');
+  return m ? IMAGE_EXT.has(m[1].toLowerCase()) : false;
+}
+
+export interface DocInput {
+  label: string;
+  content?: string | null;
+  fileUri?: string | null;
+  mimeType?: string | null;
+}
+
+// OpenAI 兼容的多模态内容块
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
+ * 构建发给模型的 user 内容。
+ * - 图片文件（Base64）：以 image_url 块发送，支持视觉的模型可直接读取
+ * - 其他（文本/PDF 等）：走 describeDocument 文本注入
+ * 返回纯字符串（无图片）或内容块数组（含图片）。
+ */
+export function buildUserContent(
+  instruction: string,
+  docs: DocInput[]
+): string | ContentPart[] {
+  const textChunks: string[] = [instruction];
+  const images: ContentPart[] = [];
+
+  for (const d of docs) {
+    const mime = d.mimeType || inferMimeFromUri(d.fileUri);
+    if (d.content && looksLikeBase64(d.content) && isImageMime(mime, d.fileUri)) {
+      const dataUrl = `data:${mime || 'image/jpeg'};base64,${d.content.replace(/\s/g, '')}`;
+      images.push({ type: 'image_url', image_url: { url: dataUrl } });
+      textChunks.push(`${d.label}：见随附图片。`);
+    } else {
+      const section = describeDocument(d.label, d.content);
+      if (section) textChunks.push(section);
+    }
+  }
+
+  if (images.length === 0) return textChunks.join('\n\n');
+  return [{ type: 'text', text: textChunks.join('\n\n') }, ...images];
+}
+
+/** 纯文本版本（用于视觉请求失败后的降级重试），永不包含图片 */
+export function buildTextOnlyContent(instruction: string, docs: DocInput[]): string {
+  const chunks = [instruction];
+  for (const d of docs) {
+    const section = describeDocument(d.label, d.content);
+    if (section) chunks.push(section);
+  }
+  return chunks.join('\n\n');
+}
+
+/** 判断内容是否包含图片块 */
+export function hasImageParts(content: string | ContentPart[]): boolean {
+  return Array.isArray(content) && content.some((p) => p.type === 'image_url');
+}

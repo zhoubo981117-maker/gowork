@@ -78,7 +78,10 @@ export default function ImportScreen() {
 
       // 2. 基于已保存的数据进行 AI 分析。分析失败不影响已保存的岗位。
       setStatusMessage('正在分析岗位 JD...');
-      const parseResult = await parseJD(jdFile.base64 || jdFile.uri);
+      const parseResult = await parseJD(jdFile.base64 || jdFile.uri, {
+        mimeType: jdFile.mimeType,
+        fileUri: jdFile.uri,
+      });
 
       if (parseResult) {
         await modifyJob(savedJobId, {
@@ -93,7 +96,11 @@ export default function ImportScreen() {
       setStatusMessage('正在生成匹配度分析...');
       const matchAnalysis = await generateMatchAnalysis(
         jdFile.base64 || jdFile.uri,
-        resumeFile.base64 || resumeFile.uri
+        resumeFile.base64 || resumeFile.uri,
+        {
+          jd: { mimeType: jdFile.mimeType, fileUri: jdFile.uri },
+          resume: { mimeType: resumeFile.mimeType, fileUri: resumeFile.uri },
+        }
       );
 
       if (matchAnalysis) {
