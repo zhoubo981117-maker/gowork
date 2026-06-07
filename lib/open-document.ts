@@ -8,7 +8,14 @@
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform, Alert } from 'react-native';
-import { looksLikeBase64 } from './ai-context';
+
+/** 粗略判断字符串是否为文件 Base64 内容 */
+function looksLikeBase64(content: string): boolean {
+  if (!content) return false;
+  const stripped = content.replace(/\s/g, '');
+  if (stripped.length < 512) return false;
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(stripped.slice(0, 1024));
+}
 
 const MIME_BY_EXT: Record<string, string> = {
   pdf: 'application/pdf',

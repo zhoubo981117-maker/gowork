@@ -39,10 +39,10 @@ export function JobCard({ job, onPress }: JobCardProps) {
       activeOpacity={0.7}
     >
       <View style={{ gap: 8 }}>
-        {/* 公司名 + 状态标签 */}
+        {/* 岗位标题 + 状态标签 */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text style={{ fontSize: 16, fontWeight: '600', color: colors.foreground, flex: 1 }}>
-            {job.companyName}
+            {job.jobTitle || '未命名岗位'}
           </Text>
           <View
             style={{
@@ -58,13 +58,12 @@ export function JobCard({ job, onPress }: JobCardProps) {
           </View>
         </View>
 
-        {/* 岗位名 */}
-        <Text style={{ fontSize: 14, fontWeight: '500', color: colors.foreground }}>
-          {job.jobTitle}
-        </Text>
-
-        {/* 地点 */}
-        <Text style={{ fontSize: 13, color: colors.muted }}>📍 {job.location}</Text>
+        {/* 公司名（可选） */}
+        {!!job.companyName && (
+          <Text style={{ fontSize: 14, fontWeight: '500', color: colors.foreground }}>
+            {job.companyName}
+          </Text>
+        )}
 
         {/* 更新时间 */}
         <Text style={{ fontSize: 12, color: colors.muted }}>

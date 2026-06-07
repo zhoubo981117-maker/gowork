@@ -2,7 +2,7 @@
  * 主页面 - 岗位管理大厅
  */
 
-import { ScrollView, Text, View, TouchableOpacity, FlatList, TextInput, ActivityIndicator } from 'react-native';
+import { ScrollView, Text, View, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenContainer } from '@/components/screen-container';
@@ -23,10 +23,9 @@ const statusOptions = [
 export default function HomeScreen() {
   const router = useRouter();
   const colors = useColors();
-  const { jobs, isLoading, loadJobs, filterByStatus, filterByLocation } = useJobs();
+  const { jobs, isLoading, loadJobs, filterByStatus } = useJobs();
 
   const [selectedStatus, setSelectedStatus] = useState<InterviewStatus | null>(null);
-  const [searchLocation, setSearchLocation] = useState('');
   const [filteredJobs, setFilteredJobs] = useState(jobs);
 
   // 每次进入/回到首页时重新加载岗位列表，确保新导入的岗位能立即显示
@@ -44,14 +43,8 @@ export default function HomeScreen() {
       filtered = filtered.filter((job) => job.status === selectedStatus);
     }
 
-    if (searchLocation.trim()) {
-      filtered = filtered.filter((job) =>
-        job.location.toLowerCase().includes(searchLocation.toLowerCase())
-      );
-    }
-
     setFilteredJobs(filtered);
-  }, [jobs, selectedStatus, searchLocation]);
+  }, [jobs, selectedStatus]);
 
   const handleStatusFilter = async (status: InterviewStatus | null) => {
     setSelectedStatus(status);
@@ -148,26 +141,6 @@ export default function HomeScreen() {
                 </TouchableOpacity>
               ))}
             </ScrollView>
-          </View>
-
-          {/* 地点搜索 */}
-          <View className="gap-2">
-            <Text className="text-sm font-semibold text-foreground">按地点搜索</Text>
-            <TextInput
-              style={{
-                borderWidth: 1,
-                borderColor: colors.border,
-                borderRadius: 8,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                color: colors.foreground,
-                backgroundColor: colors.surface,
-              }}
-              placeholder="输入城市或地点"
-              placeholderTextColor={colors.muted}
-              value={searchLocation}
-              onChangeText={setSearchLocation}
-            />
           </View>
         </View>
 
