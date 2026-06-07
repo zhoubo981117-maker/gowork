@@ -38,10 +38,15 @@ const env = {
   androidPackage: bundleId,
 };
 
+// App 版本：CI 构建时通过环境变量注入自增的 versionCode，
+// 否则 Android 会把每次打包都当成同一版本，安装时提示「已安装」、无法更新。
+const versionName = process.env.APP_VERSION_NAME || "1.0.0";
+const androidVersionCode = parseInt(process.env.ANDROID_VERSION_CODE || "1", 10);
+
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.0",
+  version: versionName,
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -66,6 +71,7 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
+    versionCode: androidVersionCode,
     permissions: ["POST_NOTIFICATIONS"],
     intentFilters: [
       {
