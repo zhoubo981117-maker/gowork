@@ -26,6 +26,8 @@ export interface Job {
   companyName: string;
   jobTitle: string;
   location: string;
+  salary?: string;                // 薪资范围，如 "25k-35k"（可选，设计稿卡片展示用）
+  experience?: string;            // 经验要求，如 "3-5年"（可选）
   status: InterviewStatus;
   jdContent: string;              // JD 原始内容（文本或 Base64）
   jdFileUri: string;              // JD 文件本地路径
